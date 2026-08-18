@@ -1,4 +1,4 @@
-# Silksong 存档管理器
+# Silksong 存档管理器（仅MacOS）
 
 一个给《Hollow Knight: Silksong》用的轻量存档管理工具（macOS）。开游戏时一起打开它，
 用几个按钮即可：把当前档存成检查点、回档、以及每 15 分钟自动备份，避免手滑丢进度。
@@ -27,16 +27,23 @@
 ### 方式 A：下载现成 .pkg（推荐给普通用户）
 
 1. 到 Release 页下载 `silksong-save-manager.pkg`。
-2. 安装后，app 位于 **`/Applications/SilksongSaveManager.app`**（由 pkg 的安装位置决定）。
-   - 是否把它留在 `/Applications` 由你自己决定：你也可以让 `.app` 待在任意位置（如下载文件夹）直接双击使用，
-     或自行拖入 `/Applications`、拖到程序坞。它不依赖安装路径，放到哪都能跑。
+2. 安装后，app 位于**用户级**目录 **`~/Applications/SilksongSaveManager.app`**
+   （即你**个人主目录**下的「应用程序」文件夹，**不需要管理员密码**），
+   而**不是**系统级的 `/Applications`。
+   - 是否进一步挪到系统级 `/Applications` 由你自己决定：你也可以让它留在 `~/Applications` 直接双击使用，
+     或自行拖入系统级 `/Applications`、拖到程序坞。它不依赖安装路径，放到哪都能跑。
 3. 如何安装（未签名 pkg 的两种做法）：
-   - **命令行（最稳，保证真正落到 `/Applications`）**：终端执行
+   - **命令行（需管理员密码，但装到用户级目录）**：终端执行
      ```bash
      sudo installer -pkg silksong-save-manager.pkg -target /
      ```
+     app 会落到你的 `~/Applications`（个人目录），而不是系统级 `/Applications`。
    - **图形界面**：双击 `.pkg` 时若被拦截（「无法验证开发者」），右键 → **打开** 继续。
      注意：未签名的 pkg 在纯图形安装流程下偶尔只登记回执、未真正落盘，遇到这种情况改用上面的命令行即可。
+
+> 最简单也最可靠、**且完全不需要管理员密码**的办法：直接把 `SilksongSaveManager.app`
+> （从 Release 的 app 资源或解包 pkg 得到）拖进你自己的 `~/Applications` 文件夹，双击即用，
+> 连安装器都不需要。
 
 ### 方式 B：从源码自己构建（开发者）
 
@@ -46,7 +53,7 @@
 git clone <你的仓库地址>
 cd silksong-save-manager
 ./build_app.sh        # 生成 dist/SilksongSaveManager.app
-./build_pkg.sh        # 生成 silksong-save-manager.pkg（安装到 /Applications）
+./build_pkg.sh        # 生成 silksong-save-manager.pkg（安装到用户级 ~/Applications）
 ```
 
 `build_app.sh` 会在隔离的虚拟环境里安装 PyInstaller，把脚本冻结成**自包含 .app**
@@ -67,7 +74,7 @@ cd silksong-save-manager
 | `save_manager.py` | 主程序（界面 + 复制/自动保存逻辑，含自动探测存档目录） |
 | `silksong.icns` | 丝之歌风格图标（Hornet + 检查点标记） |
 | `build_app.sh` | 用 PyInstaller 冻结为自包含 .app |
-| `build_pkg.sh` | 用 pkgbuild 封装 .pkg 安装到 /Applications |
+| `build_pkg.sh` | 用 pkgbuild 封装 .pkg，安装到用户级 ~/Applications（无需管理员密码） |
 
 ## 备注
 
