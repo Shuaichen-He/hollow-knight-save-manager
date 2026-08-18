@@ -17,8 +17,8 @@ Silksong 存档管理器 (unity.Team-Cherry.Silksong)
   - 后台仅一个轻量守护线程做 15 分钟轮询 + 一个 1 秒倒计时刷新，CPU/内存占用极小。
   - 复制采用“先删后拷”，确保目标档完全等同源档，不会残留旧文件。
   - 存档根目录自动探测：在 ~/Library/Application Support/unity.Team-Cherry.Silksong/ 下
-    寻找含 Restore_Points2 的数字目录；找不到时弹窗让用户手动选择，并写入
-    ~/.silksong_save_manager.json 以记住选择。
+    寻找含 Restore_Points2 的数字目录；找不到时弹窗让用户手动选择，并把选择写入
+    app 包内的 silksong_save_manager.json（随 app 走，不放在用户目录）。
 """
 
 import os
@@ -35,9 +35,25 @@ from tkinter import messagebox, scrolledtext, filedialog
 # ---------------------------------------------------------------------------
 # 存档根目录解析（自动探测 + 配置文件覆盖 + 手动选择）
 # ---------------------------------------------------------------------------
-CONFIG_PATH = os.path.expanduser("~/.silksong_save_manager.json")
 SEARCH_ROOT = os.path.expanduser(
     "~/Library/Application Support/unity.Team-Cherry.Silksong")
+
+
+def _app_resources_dir():
+    """配置文件的存放目录：随 app 走，放在 app 包内的 Resources 里。
+
+    冻结后的 .app：sys.executable 位于 Contents/MacOS 下，取上一级的 Resources。
+    源码直接运行时：放在脚本同目录。
+    注意：若 app 装在只读位置（如系统级 /Applications），写入会失败，
+    此时不持久化（每次启动重新探测），属可接受的退化行为。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.normpath(
+            os.path.join(os.path.dirname(sys.executable), "..", "Resources"))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+CONFIG_PATH = os.path.join(_app_resources_dir(), "silksong_save_manager.json")
 
 AUTOSAVE_INTERVAL = 15 * 60  # 秒
 
@@ -58,8 +74,9 @@ def _save_config_base(base):
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump({"save_base": base}, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001
+        # 常见于 app 装在只读位置（如系统级 /Applications）
+        print(f"警告：无法把存档路径写入配置（{CONFIG_PATH}）：{e}")
 
 
 def _detect_candidates():

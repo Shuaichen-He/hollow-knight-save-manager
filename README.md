@@ -1,4 +1,4 @@
-# Silksong 存档管理器（仅MacOS）
+# s存档管理器（仅MacOS）
 
 一个给《Hollow Knight: Silksong》用的轻量存档管理工具（macOS）。开游戏时一起打开它，
 用几个按钮即可：把当前档存成检查点、回档、以及每 15 分钟自动备份，避免手滑丢进度。
@@ -19,8 +19,10 @@
 脚本会自动在 `~/Library/Application Support/unity.Team-Cherry.Silksong/` 下寻找含
 `Restore_Points2` 的数字目录（不同机器 steamid 不同也没关系）。
 
-- 找到且唯一 → 直接使用，并写入 `~/.silksong_save_manager.json` 记住。
-- 找不到 → 弹窗让你手动选择那个数字文件夹。
+- 找到且唯一 → 直接使用，并把用户的选择写入 app 包内的
+  `SilksongSaveManager.app/Contents/Resources/silksong_save_manager.json` 记住。
+- 找不到 → 弹窗让你手动选择那个数字文件夹，选择结果同样写进上面的 app 内配置文件。
+- 配置文件随 app 走，**不会**在你的用户主目录下生成隐藏文件；想清除记忆，删掉 app 包内那个 json 即可。
 
 ## 怎么拿到并运行
 
