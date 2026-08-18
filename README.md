@@ -27,9 +27,16 @@
 ### 方式 A：下载现成 .pkg（推荐给普通用户）
 
 1. 到 Release 页下载 `silksong-save-manager.pkg`。
-2. 双击安装，app 会出现在 `/Applications`。
-3. 首次打开若被拦截（未签名）：右键 `.pkg` → **打开**，或终端执行
-   `sudo installer -pkg silksong-save-manager.pkg -target /`。
+2. 安装后，app 位于 **`/Applications/SilksongSaveManager.app`**（由 pkg 的安装位置决定）。
+   - 是否把它留在 `/Applications` 由你自己决定：你也可以让 `.app` 待在任意位置（如下载文件夹）直接双击使用，
+     或自行拖入 `/Applications`、拖到程序坞。它不依赖安装路径，放到哪都能跑。
+3. 如何安装（未签名 pkg 的两种做法）：
+   - **命令行（最稳，保证真正落到 `/Applications`）**：终端执行
+     ```bash
+     sudo installer -pkg silksong-save-manager.pkg -target /
+     ```
+   - **图形界面**：双击 `.pkg` 时若被拦截（「无法验证开发者」），右键 → **打开** 继续。
+     注意：未签名的 pkg 在纯图形安装流程下偶尔只登记回执、未真正落盘，遇到这种情况改用上面的命令行即可。
 
 ### 方式 B：从源码自己构建（开发者）
 
