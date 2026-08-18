@@ -2,6 +2,9 @@
 build/
 dist/
 *.spec
+build.bak.*
+dist.bak.*
+*.spec.bak.*
 __pycache__/
 *.pyc
 

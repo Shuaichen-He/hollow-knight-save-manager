@@ -25,35 +25,27 @@
 - 找不到 → 弹窗让你手动选择那个数字文件夹，选择结果同样写进上面的 app 内配置文件。
 - 配置文件随 app 走，**不会**在你的用户主目录下生成隐藏文件；想清除记忆，删掉 app 包内那个 json 即可。
 
-## 怎么拿到并运行
+## 下载与安装（推荐：无需 clone）
 
-### 方式 A：下载现成 .pkg（推荐给普通用户）
+直接下载打包好的 `.pkg`，双击安装即可，**不需要 clone 仓库、也不需要本机装 Python**：
 
-1. 到 Release 页下载 `silksong-save-manager.pkg`。
-2. 安装后，app 位于**用户级**目录 **`~/Applications/SilksongSaveManager.app`**
-   （即你**个人主目录**下的「应用程序」文件夹，**不需要管理员密码**），
-   而**不是**系统级的 `/Applications`。
-   - 是否进一步挪到系统级 `/Applications` 由你自己决定：你也可以让它留在 `~/Applications` 直接双击使用，
-     或自行拖入系统级 `/Applications`、拖到程序坞。它不依赖安装路径，放到哪都能跑。
-3. 如何安装（未签名 pkg 的两种做法）：
-   - **命令行（需管理员密码，但装到用户级目录）**：终端执行
-     ```bash
-     sudo installer -pkg silksong-save-manager.pkg -target /
-     ```
-     app 会落到你的 `~/Applications`（个人目录），而不是系统级 `/Applications`。
-   - **图形界面**：双击 `.pkg` 时若被拦截（「无法验证开发者」），右键 → **打开** 继续。
-     注意：未签名的 pkg 在纯图形安装流程下偶尔只登记回执、未真正落盘，遇到这种情况改用上面的命令行即可。
+- **下载地址**：https://raw.githubusercontent.com/Shuaichen-He/silksong-save-manager/main/silksong-save-manager.pkg
 
-> 最简单也最可靠、**且完全不需要管理员密码**的办法：直接把 `SilksongSaveManager.app`
-> （从 Release 的 app 资源或解包 pkg 得到）拖进你自己的 `~/Applications` 文件夹，双击即用，
-> 连安装器都不需要。
+安装后 app 位于**用户级**目录 **`~/Applications/SilksongSaveManager.app`**
+（你个人主目录下的「应用程序」文件夹，**不需要管理员密码**），而**不是**系统级 `/Applications`。
 
-### 方式 B：从源码自己构建（开发者）
+> 未签名提示：双击 `.pkg` 若被拦截（「无法验证开发者」），右键 → **打开** 继续；
+> 或用终端 `sudo installer -pkg silksong-save-manager.pkg -target /`（仍装到你的 `~/Applications`）。
+> 最省事的办法：把 `SilksongSaveManager.app` 直接拖进自己的 `~/Applications`，双击即用，连安装器都不需要。
+
+> 该下载链接依赖仓库为**公开（Public）**仓库；若你之后把仓库设为私有，链接会失效，需改用 GitHub Release 附件。
+
+## 从源码自己构建（开发者）
 
 需要本机有 Python 3（带 tkinter）。仓库已自带图标，构建脚本会自动处理。
 
 ```bash
-git clone <你的仓库地址>
+git clone https://github.com/Shuaichen-He/silksong-save-manager.git
 cd silksong-save-manager
 ./build_app.sh        # 生成 dist/SilksongSaveManager.app
 ./build_pkg.sh        # 生成 silksong-save-manager.pkg（安装到用户级 ~/Applications）

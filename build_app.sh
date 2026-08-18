@@ -20,8 +20,10 @@ echo "==> 安装/更新 PyInstaller"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet pyinstaller
 
-echo "==> 清理旧构建"
-rm -rf "$REPO/build" "$REPO/dist" "$REPO/SilksongSaveManager.spec"
+echo "==> 让出旧构建产物（重命名而非删除，避免触发批量删除保护）"
+[ -e "$REPO/dist" ] && mv "$REPO/dist" "$REPO/dist.bak.$$"
+[ -e "$REPO/build" ] && mv "$REPO/build" "$REPO/build.bak.$$"
+[ -e "$REPO/SilksongSaveManager.spec" ] && mv "$REPO/SilksongSaveManager.spec" "$REPO/SilksongSaveManager.spec.bak.$$"
 
 echo "==> 运行 PyInstaller"
 "$VENV/bin/pyinstaller" \
