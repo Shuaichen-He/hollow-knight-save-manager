@@ -29,7 +29,7 @@
 
 直接下载打包好的 `.pkg`，双击安装即可，**不需要 clone 仓库、也不需要本机装 Python**：
 
-- **下载地址**：https://raw.githubusercontent.com/Shuaichen-He/silksong-save-manager/main/silksong-save-manager.pkg
+- **下载地址（GitHub Release）**：https://github.com/Shuaichen-He/silksong-save-manager/releases/download/v1.0/silksong-save-manager.pkg
 
 安装后 app 位于**用户级**目录 **`~/Applications/SilksongSaveManager.app`**
 （你个人主目录下的「应用程序」文件夹，**不需要管理员密码**），而**不是**系统级 `/Applications`。
@@ -38,7 +38,7 @@
 > 或用终端 `sudo installer -pkg silksong-save-manager.pkg -target /`（仍装到你的 `~/Applications`）。
 > 最省事的办法：把 `SilksongSaveManager.app` 直接拖进自己的 `~/Applications`，双击即用，连安装器都不需要。
 
-> 该下载链接依赖仓库为**公开（Public）**仓库；若你之后把仓库设为私有，链接会失效，需改用 GitHub Release 附件。
+> 该下载链接指向 GitHub Release 附件，公开/私有仓库均可（私有仓库需先登录 GitHub 再下载）。
 
 ## 从源码自己构建（开发者）
 
