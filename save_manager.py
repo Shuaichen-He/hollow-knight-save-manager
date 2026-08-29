@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Silksong 存档管理器 (unity.Team-Cherry.Silksong)
+空洞骑士存档管理器（Hollow Knight / Silksong 双游戏支持）
 
 功能：
-  - 手动存档按钮：把 2 号档完整复制到 3 号档（3 号档作为可重复使用的检查点，保留不变）。
+  - 顶部居中「切换游戏」按钮：在 丝之歌(Silksong) 与 空洞骑士(Hollow Knight) 之间随意切换，
+    每个游戏独立记忆自己的存档目录，并记住上次选择的游戏。
+  - 手动存档按钮（2->3）：把 2 号档完整复制到 3 号档（3 号档作为可重复使用的检查点，保留不变）。
   - 回档按钮（3->2）：把 3 号档完整复制到 2 号档（3 号档保留，可反复回档到同一检查点）。
   - 回档按钮（4->2）：把 4 号档（每 15 分钟自动保存的检查点）完整复制到 2 号档。
-  - 自动保存：每 15 分钟检测 2 号档是否有变化，有变化则复制到 4 号档（4 号档作为时间维度的自动检查点）。
+  - 自动保存：每 15 分钟检测 2 号档是否有变化，有变化则复制到 4 号档。
 
-每次复制都包含：
-  - 文件夹 Restore_PointsN/（还原数据，如 NODELrestoreData1.dat）
-  - 存档文件 userN.dat
+两种游戏的存档结构：
+  - 丝之歌 (unity.Team-Cherry.Silksong/<steamid>/)：Restore_PointsN/ 文件夹 + userN.dat
+  - 空洞骑士 (unity.Team Cherry.Hollow Knight/)：只有 userN.dat 平铺在根目录（无 Restore_Points）
+    空洞骑士的 userX_版本号.dat / userX.dat.bak* 等版本备份文件一律不处理，只操作 userN.dat。
 
 说明：
   - 后台仅一个轻量守护线程做 15 分钟轮询 + 一个 1 秒倒计时刷新，CPU/内存占用极小。
   - 复制采用“先删后拷”，确保目标档完全等同源档，不会残留旧文件。
-  - 存档根目录自动探测：在 ~/Library/Application Support/unity.Team-Cherry.Silksong/ 下
-    寻找含 Restore_Points2 的数字目录；找不到时弹窗让用户手动选择，并把选择写入
-    app 包内的 silksong_save_manager.json（随 app 走，不放在用户目录）。
+  - 存档根目录自动探测；找不到时弹窗让用户手动选择，并把选择写入
+    app 包内的 hollow_knight_save_manager.json（随 app 走，不放在用户目录）。
 """
 
 import os
@@ -33,10 +35,22 @@ import tkinter as tk
 from tkinter import messagebox, scrolledtext, filedialog
 
 # ---------------------------------------------------------------------------
-# 存档根目录解析（自动探测 + 配置文件覆盖 + 手动选择）
+# 游戏定义
 # ---------------------------------------------------------------------------
-SEARCH_ROOT = os.path.expanduser(
-    "~/Library/Application Support/unity.Team-Cherry.Silksong")
+GAMES = {
+    "silksong": {
+        "name": "丝之歌",
+        "style": "silksong",  # Restore_PointsN/ + userN.dat
+        "search_root": os.path.expanduser(
+            "~/Library/Application Support/unity.Team-Cherry.Silksong"),
+    },
+    "hollowknight": {
+        "name": "空洞骑士",
+        "style": "flat",  # 只有 userN.dat 平铺
+        "search_root": os.path.expanduser(
+            "~/Library/Application Support/unity.Team Cherry.Hollow Knight"),
+    },
+}
 
 
 def _app_resources_dir():
@@ -53,59 +67,103 @@ def _app_resources_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 
-CONFIG_PATH = os.path.join(_app_resources_dir(), "silksong_save_manager.json")
+CONFIG_PATH = os.path.join(_app_resources_dir(), "hollow_knight_save_manager.json")
 
 AUTOSAVE_INTERVAL = 15 * 60  # 秒
 
+# 当前游戏 / 当前存档根目录（模块加载时置空，真正解析在 main()/selftest() 中按需进行）
+CURRENT_GAME = None
+BASE = None
+GAME_BASES = {}  # game -> save_base
 
-def _load_config_base():
+
+# ---------------------------------------------------------------------------
+# 配置文件读写（多游戏结构，兼容旧的 {"save_base": ...} 格式）
+# ---------------------------------------------------------------------------
+def _load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        b = data.get("save_base")
-        if b and os.path.isdir(os.path.join(b, "Restore_Points2")):
-            return b
+        if "games" in data:
+            return data
+        # 旧格式 {"save_base": "..."} -> 迁移为丝之歌的配置
+        if data.get("save_base"):
+            return {"games": {"silksong": {"save_base": data["save_base"]}},
+                    "last_game": "silksong"}
     except Exception:
         pass
-    return None
+    return {"games": {}, "last_game": None}
 
 
-def _save_config_base(base):
+def _save_config():
+    cfg = {"games": {}, "last_game": CURRENT_GAME}
+    for g in GAMES:
+        if GAME_BASES.get(g):
+            cfg["games"][g] = {"save_base": GAME_BASES[g]}
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump({"save_base": base}, f, ensure_ascii=False, indent=2)
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception as e:  # noqa: BLE001
         # 常见于 app 装在只读位置（如系统级 /Applications）
         print(f"警告：无法把存档路径写入配置（{CONFIG_PATH}）：{e}")
 
 
-def _detect_candidates():
-    """返回所有含 Restore_Points2 的子目录（按修改时间倒序）。"""
-    cands = []
-    if not os.path.isdir(SEARCH_ROOT):
-        return cands
-    for name in os.listdir(SEARCH_ROOT):
-        p = os.path.join(SEARCH_ROOT, name)
-        if os.path.isdir(p) and os.path.isdir(os.path.join(p, "Restore_Points2")):
-            try:
-                mtime = os.path.getmtime(p)
-            except OSError:
-                mtime = 0
-            cands.append((mtime, p))
-    cands.sort(reverse=True)
-    return [p for _, p in cands]
+# ---------------------------------------------------------------------------
+# 存档根目录解析（自动探测 + 配置文件覆盖 + 手动选择）
+# ---------------------------------------------------------------------------
+def _validate_base(game, b):
+    """校验某个候选目录是否是该游戏的存档根目录。"""
+    if not b:
+        return False
+    if game == "silksong":
+        return os.path.isdir(os.path.join(b, "Restore_Points2"))
+    # hollowknight：目录存在且含 user2.dat
+    return os.path.isfile(os.path.join(b, "user2.dat"))
 
 
-def _ask_user_for_base():
+def _detect_candidates(game):
+    """返回该游戏所有候选存档根目录（按修改时间倒序）。"""
+    root = GAMES[game]["search_root"]
+    if game == "silksong":
+        cands = []
+        if not os.path.isdir(root):
+            return cands
+        for name in os.listdir(root):
+            p = os.path.join(root, name)
+            if os.path.isdir(p) and os.path.isdir(os.path.join(p, "Restore_Points2")):
+                try:
+                    mtime = os.path.getmtime(p)
+                except OSError:
+                    mtime = 0
+                cands.append((mtime, p))
+        cands.sort(reverse=True)
+        return [p for _, p in cands]
+    # hollowknight：存档根目录就是 search_root 本身
+    if os.path.isfile(os.path.join(root, "user2.dat")):
+        return [root]
+    return []
+
+
+def _ask_user_for_base(game):
     """用隐藏 Tk 弹窗让用户选择存档根目录。"""
+    info = GAMES[game]
     root = tk.Tk()
     root.withdraw()
     try:
-        msg = ("未能自动找到 Silksong 存档目录。\n"
-               "请选择 unity.Team-Cherry.Silksong 下那个包含 Restore_Points2 的数字文件夹。")
-        messagebox.showinfo("选择存档目录", msg)
-        path = filedialog.askdirectory(
-            title="选择 Silksong 存档目录（含 Restore_Points2 的文件夹）")
+        if game == "silksong":
+            messagebox.showinfo(
+                "选择存档目录",
+                f"未能自动找到{info['name']}存档目录。\n"
+                "请选择 unity.Team-Cherry.Silksong 下那个包含 Restore_Points2 的数字文件夹。")
+            path = filedialog.askdirectory(
+                title="选择 Silksong 存档目录（含 Restore_Points2 的文件夹）")
+        else:
+            messagebox.showinfo(
+                "选择存档目录",
+                f"未能自动找到{info['name']}存档目录。\n"
+                "请选择包含 user2.dat 的存档文件夹。")
+            path = filedialog.askdirectory(
+                title="选择 Hollow Knight 存档目录（含 user2.dat 的文件夹）")
     finally:
         try:
             root.destroy()
@@ -114,42 +172,47 @@ def _ask_user_for_base():
     return path or None
 
 
-def resolve_save_base(interactive=True):
-    """解析存档根目录，返回绝对路径。
+def resolve_save_base(game, interactive=True):
+    """解析指定游戏的存档根目录，返回绝对路径，并记入 GAME_BASES。
 
     interactive=True 时：找不到才弹窗让用户选择；失败则退出程序。
     interactive=False 时（如 --selftest）：找不到直接退出，不弹 GUI。
     """
-    b = _load_config_base()
-    if b:
+    global GAME_BASES
+    b = GAME_BASES.get(game)
+    if b and _validate_base(game, b):
         return b
-    cands = _detect_candidates()
+    cands = _detect_candidates(game)
     if len(cands) == 1:
+        GAME_BASES[game] = cands[0]
         return cands[0]
     if cands:
         if not interactive:
             sys.exit(2)
         # 多个候选：让用户挑（默认展示第一个）
-        b = _ask_user_for_base() or cands[0]
+        b = _ask_user_for_base(game) or cands[0]
     else:
         if not interactive:
             sys.exit(2)
-        b = _ask_user_for_base()
-    if not b or not os.path.isdir(os.path.join(b, "Restore_Points2")):
+        b = _ask_user_for_base(game)
+    if not b or not _validate_base(game, b):
         messagebox.showerror(
             "无法定位存档",
-            "没有找到有效的 Silksong 存档目录（需含 Restore_Points2）。程序将退出。")
+            f"没有找到有效的{GAMES[game]['name']}存档目录。程序将退出。")
         sys.exit(1)
+    GAME_BASES[game] = b
     return b
 
 
-# 模块加载时先置空，避免在 import / PyInstaller 分析 / --selftest 时误弹 GUI。
-# 真正的解析在 main()（GUI）和 selftest() 中按需进行。
-BASE = None
+def _game_style():
+    return GAMES[CURRENT_GAME]["style"]
 
 
 def slot_folder(n):
-    return os.path.join(BASE, f"Restore_Points{n}")
+    """丝之歌结构下返回 Restore_PointsN 路径；空洞骑士（flat）返回 None。"""
+    if _game_style() == "silksong":
+        return os.path.join(BASE, f"Restore_Points{n}")
+    return None
 
 
 def slot_dat(n):
@@ -160,23 +223,27 @@ def slot_dat(n):
 # 核心复制 / 变化检测逻辑
 # ---------------------------------------------------------------------------
 def copy_slot(src, dst, logfn=print):
-    """把 src 号档（文件夹 + .dat）完整复制到 dst 号档，dst 被覆盖。"""
-    src_f, dst_f = slot_folder(src), slot_folder(dst)
-    src_d, dst_d = slot_dat(src), slot_dat(dst)
+    """把 src 号档完整复制到 dst 号档，dst 被覆盖。
 
-    if not os.path.isdir(src_f):
-        raise FileNotFoundError(f"源文件夹不存在: {src_f}")
+    丝之歌：文件夹 Restore_PointsN/ + userN.dat；空洞骑士：仅 userN.dat。
+    """
+    gname = GAMES[CURRENT_GAME]["name"]
+    src_d, dst_d = slot_dat(src), slot_dat(dst)
     if not os.path.isfile(src_d):
         raise FileNotFoundError(f"源存档文件不存在: {src_d}")
 
-    # 文件夹：先删后拷，保证 dst 完全等同 src（不残留旧文件）
-    if os.path.exists(dst_f):
-        shutil.rmtree(dst_f)
-    shutil.copytree(src_f, dst_f)
+    if _game_style() == "silksong":
+        src_f, dst_f = slot_folder(src), slot_folder(dst)
+        if not os.path.isdir(src_f):
+            raise FileNotFoundError(f"源文件夹不存在: {src_f}")
+        # 文件夹：先删后拷，保证 dst 完全等同 src（不残留旧文件）
+        if os.path.exists(dst_f):
+            shutil.rmtree(dst_f)
+        shutil.copytree(src_f, dst_f)
 
     # .dat 文件：copy2 保留时间戳等元数据
     shutil.copy2(src_d, dst_d)
-    logfn(f"已复制 {src} 号档 -> {dst} 号档")
+    logfn(f"[{gname}] 已复制 {src} 号档 -> {dst} 号档")
 
 
 def copy_slot_retry(src, dst, logfn=print, retries=2):
@@ -197,22 +264,23 @@ def copy_slot_retry(src, dst, logfn=print, retries=2):
 def slot_signature(n):
     """返回 2 号档当前的“指纹”（文件大小+修改时间）。用于检测是否变化。"""
     items = []
-    for p in (slot_folder(n), slot_dat(n)):
-        if os.path.isdir(p):
-            for root, _, files in os.walk(p):
-                for f in files:
-                    fp = os.path.join(root, f)
-                    try:
-                        st = os.stat(fp)
-                        items.append((fp, st.st_size, st.st_mtime_ns))
-                    except OSError:
-                        pass
-        elif os.path.isfile(p):
-            try:
-                st = os.stat(p)
-                items.append((p, st.st_size, st.st_mtime_ns))
-            except OSError:
-                pass
+    f = slot_folder(n)
+    if f and os.path.isdir(f):
+        for root, _, files in os.walk(f):
+            for name in files:
+                fp = os.path.join(root, name)
+                try:
+                    st = os.stat(fp)
+                    items.append((fp, st.st_size, st.st_mtime_ns))
+                except OSError:
+                    pass
+    d = slot_dat(n)
+    if os.path.isfile(d):
+        try:
+            st = os.stat(d)
+            items.append((d, st.st_size, st.st_mtime_ns))
+        except OSError:
+            pass
     return tuple(sorted(items))
 
 
@@ -257,10 +325,12 @@ class Autosaver(threading.Thread):
 # GUI
 # ---------------------------------------------------------------------------
 class App:
-    def __init__(self, root):
+    def __init__(self, root, game):
+        global BASE, CURRENT_GAME
+        CURRENT_GAME = game
         self.root = root
-        root.title("Silksong 存档管理器")
-        root.geometry("400x360")
+        self._apply_title()
+        root.geometry("430x410")
         root.resizable(False, False)
 
         self.state = {
@@ -270,9 +340,14 @@ class App:
             "lock": threading.Lock(),
         }
 
+        # 顶部居中：切换游戏按钮
+        self.game_btn = tk.Button(root, text=self._game_btn_text(), width=30,
+                                  command=self.switch_game)
+        self.game_btn.pack(pady=(12, 2))
+
         self.status_var = tk.StringVar(value="准备就绪")
         tk.Label(root, textvariable=self.status_var, fg="#1a59d6",
-                 wraplength=370, font=("Helvetica", 11, "bold")).pack(pady=(10, 2))
+                 wraplength=400, font=("Helvetica", 11, "bold")).pack(pady=(6, 2))
         self.count_var = tk.StringVar(value="下次自动保存检查：--:--")
         tk.Label(root, textvariable=self.count_var, fg="#555555").pack()
 
@@ -293,13 +368,21 @@ class App:
         self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
 
         self.log_msg(f"存档目录：{BASE}")
-        self.log_msg("工具已启动。2 号档=当前游玩档；3 号档=手动检查点；4 号档... 4 号档=每 15 分钟自动保存。")
+        self.log_msg(f"当前游戏：{GAMES[CURRENT_GAME]['name']}。"
+                     "2 号档=当前游玩档；3 号档=手动检查点；4 号档=每 15 分钟自动保存。")
         self._check_paths()
 
         self.autosaver = Autosaver(self.log_msg, self.state)
         self.autosaver.start()
         self.tick()
         root.protocol("WM_DELETE_WINDOW", self.quit_app)
+
+    def _apply_title(self):
+        self.root.title("空洞骑士存档管理器")
+
+    def _game_btn_text(self):
+        other = "空洞骑士" if CURRENT_GAME == "silksong" else "丝之歌"
+        return f"当前游戏：{GAMES[CURRENT_GAME]['name']}　（点击切换到 {other}）"
 
     # ---- 日志（后台线程安全：统一切回主线程写 UI）----
     def log_msg(self, msg):
@@ -315,10 +398,38 @@ class App:
 
     def _check_paths(self):
         for n in (2, 3, 4):
-            if not os.path.isdir(slot_folder(n)):
-                self.log_msg(f"警告：{slot_folder(n)} 不存在")
+            if _game_style() == "silksong":
+                if not os.path.isdir(slot_folder(n)):
+                    self.log_msg(f"警告：{slot_folder(n)} 不存在")
             if not os.path.isfile(slot_dat(n)):
                 self.log_msg(f"提示：{slot_dat(n)} 不存在（自动存档时会创建）")
+
+    # ---- 切换游戏 ----
+    def switch_game(self):
+        global BASE, CURRENT_GAME
+        new = "hollowknight" if CURRENT_GAME == "silksong" else "silksong"
+        old_name = GAMES[CURRENT_GAME]["name"]
+        GAME_BASES[CURRENT_GAME] = BASE
+        try:
+            CURRENT_GAME = new
+            BASE = resolve_save_base(new, interactive=True)
+        except SystemExit:
+            # 用户在新游戏上没有有效存档且取消选择 -> 切回原游戏
+            CURRENT_GAME = "hollowknight" if new == "silksong" else "silksong"
+            BASE = GAME_BASES.get(CURRENT_GAME) or BASE
+            self.log_msg("切换已取消：未能定位目标游戏存档。")
+            return
+        GAME_BASES[new] = BASE
+        _save_config()
+        # 刷新自动保存基准（换游戏后指纹立即对准新游戏的 2 号档）
+        with self.state["lock"]:
+            self.state["last_sig"] = slot_signature(2)
+            self.state["next_check"] = time.time() + AUTOSAVE_INTERVAL
+        self._apply_title()
+        self.game_btn.config(text=self._game_btn_text())
+        self.status_var.set(f"已切换到 {GAMES[CURRENT_GAME]['name']} 存档")
+        self.log_msg(f"已从 {old_name} 切换到 {GAMES[CURRENT_GAME]['name']}，存档目录：{BASE}")
+        self._check_paths()
 
     # ---- 按钮动作 ----
     def manual_save(self):
@@ -391,63 +502,89 @@ class App:
 
 
 # ---------------------------------------------------------------------------
-# 自检（不触碰真实存档，复制进临时目录验证逻辑）
+# 自检（合成临时目录验证两种存档结构，不触碰真实存档）
 # ---------------------------------------------------------------------------
-def selftest():
-    global BASE
-    import tempfile
+def _test_copy_logic(base, check_folder):
     import filecmp
 
-    # 非交互解析真实存档根目录（用于拷贝样本，不弹 GUI）
-    BASE = resolve_save_base(interactive=False)
+    def same_dat(a, b):
+        return filecmp.cmp(os.path.join(base, f"user{a}.dat"),
+                           os.path.join(base, f"user{b}.dat"), shallow=False)
+
+    def same_folder(a, b):
+        if not check_folder:
+            return True
+        d = filecmp.dircmp(os.path.join(base, f"Restore_Points{a}"),
+                           os.path.join(base, f"Restore_Points{b}"))
+        return not d.left_only and not d.right_only and not d.diff_files
+
+    copy_slot(2, 3, print)
+    assert same_dat(2, 3), "2->3 dat 不一致"
+    assert same_folder(2, 3), "2->3 文件夹内容不一致"
+    print("OK: 2 -> 3 复制正确")
+
+    copy_slot(3, 2, print)
+    assert same_dat(3, 2), "3->2 dat 不一致"
+    assert same_folder(3, 2), "3->2 文件夹内容不一致"
+    print("OK: 3 -> 2 复制正确")
+
+    copy_slot(2, 4, print)
+    assert same_dat(2, 4), "2->4 dat 不一致"
+    assert same_folder(2, 4), "2->4 文件夹内容不一致"
+    print("OK: 2 -> 4 复制正确")
+
+    s1 = slot_signature(2)
+    with open(slot_dat(2), "ab") as f:
+        f.write(b"x")
+    s2 = slot_signature(2)
+    assert s1 != s2, "修改后应检测到变化"
+    print("OK: 变化检测生效")
+
+
+def selftest():
+    global BASE, CURRENT_GAME
+    import tempfile
+
     tmp = tempfile.mkdtemp(prefix="ssl_test_")
     print("selftest base:", tmp)
-    for n in (2, 3, 4):
-        shutil.copytree(slot_folder(n), os.path.join(tmp, f"Restore_Points{n}"))
-        if os.path.isfile(slot_dat(n)):
-            shutil.copy2(slot_dat(n), os.path.join(tmp, f"user{n}.dat"))
-
-    saved = BASE
-    BASE = tmp
     try:
-        copy_slot(2, 3, print)
-        dircmp = filecmp.dircmp(os.path.join(tmp, "Restore_Points2"),
-                                os.path.join(tmp, "Restore_Points3"))
-        assert not dircmp.left_only and not dircmp.right_only and not dircmp.diff_files, \
-            f"文件夹内容不一致: {dircmp.report()}"
-        assert filecmp.cmp(os.path.join(tmp, "user2.dat"),
-                           os.path.join(tmp, "user3.dat"), shallow=False), "dat 不一致"
-        print("OK: 2 -> 3 复制正确")
+        # ---- 丝之歌结构（Restore_PointsN + userN.dat）----
+        sbase = os.path.join(tmp, "silksong")
+        os.makedirs(sbase)
+        for n in (2, 3, 4):
+            os.makedirs(os.path.join(sbase, f"Restore_Points{n}"))
+            with open(os.path.join(sbase, f"Restore_Points{n}", "NODELrestoreData1.dat"),
+                      "w") as f:
+                f.write(f"restore-{n}")
+            with open(os.path.join(sbase, f"user{n}.dat"), "w") as f:
+                f.write(f"user-{n}")
+        BASE, CURRENT_GAME = sbase, "silksong"
+        print("== 测试 silksong 结构 ==")
+        _test_copy_logic(sbase, check_folder=True)
+        print("OK: silksong 结构全部通过")
 
-        copy_slot(3, 2, print)
-        dircmp = filecmp.dircmp(os.path.join(tmp, "Restore_Points3"),
-                                os.path.join(tmp, "Restore_Points2"))
-        assert not dircmp.left_only and not dircmp.right_only and not dircmp.diff_files, \
-            "3->2 文件夹内容不一致"
-        print("OK: 3 -> 2 复制正确")
+        # ---- 空洞骑士结构（仅 userN.dat 平铺）----
+        hbase = os.path.join(tmp, "hollowknight")
+        os.makedirs(hbase)
+        for n in (2, 3, 4):
+            with open(os.path.join(hbase, f"user{n}.dat"), "w") as f:
+                f.write(f"hk-user-{n}")
+        BASE, CURRENT_GAME = hbase, "hollowknight"
+        print("== 测试 hollowknight 结构 ==")
+        _test_copy_logic(hbase, check_folder=False)
+        print("OK: hollowknight 结构全部通过")
 
-        copy_slot(2, 4, print)
-        dircmp = filecmp.dircmp(os.path.join(tmp, "Restore_Points2"),
-                                os.path.join(tmp, "Restore_Points4"))
-        assert not dircmp.left_only and not dircmp.right_only and not dircmp.diff_files, \
-            "2->4 文件夹内容不一致"
-        print("OK: 2 -> 4 复制正确")
-
-        s1 = slot_signature(2)
-        with open(slot_dat(2), "ab") as f:
-            f.write(b"x")
-        s2 = slot_signature(2)
-        assert s1 != s2, "修改后应检测到变化"
-        print("OK: 变化检测生效")
         print("ALL TESTS PASSED")
     finally:
-        BASE = saved
+        BASE = None
+        CURRENT_GAME = None
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Silksong 存档管理器")
+    parser = argparse.ArgumentParser(
+        description="空洞骑士存档管理器（Hollow Knight / Silksong 双游戏）")
     parser.add_argument("--selftest", action="store_true",
                         help="运行逻辑自检（不修改真实存档）")
     args = parser.parse_args()
@@ -456,13 +593,22 @@ def main():
         selftest()
         return
 
-    # GUI 模式：解析存档根目录（必要时弹窗让用户选择并记住）
-    global BASE
-    BASE = resolve_save_base(interactive=True)
-    _save_config_base(BASE)
+    # GUI 模式：加载配置，恢复上次选择的游戏并解析其存档根目录
+    global BASE, CURRENT_GAME
+    cfg = _load_config()
+    for g, info in cfg.get("games", {}).items():
+        if g in GAMES and info.get("save_base"):
+            GAME_BASES[g] = info["save_base"]
+    initial = cfg.get("last_game")
+    if initial not in GAMES:
+        initial = "silksong"
+    CURRENT_GAME = initial
+    BASE = resolve_save_base(CURRENT_GAME, interactive=True)
+    GAME_BASES[CURRENT_GAME] = BASE
+    _save_config()
 
     # 运行日志写到用户可写位置（安装到 /Applications 后 Resources 不可写）
-    log_dir = os.path.expanduser("~/Library/Logs/SilksongSaveManager")
+    log_dir = os.path.expanduser("~/Library/Logs/HollowKnightSaveManager")
     try:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, "app.log")
@@ -472,7 +618,7 @@ def main():
         pass
 
     root = tk.Tk()
-    App(root)
+    App(root, CURRENT_GAME)
     root.mainloop()
 
 
