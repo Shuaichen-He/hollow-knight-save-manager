@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-空洞骑士存档管理器（Hollow Knight / Silksong 双游戏支持）
+r"""
+空洞骑士存档管理器 · Windows 版（Hollow Knight / Silksong 双游戏支持）
 
-功能：
+本文件是 macOS 版 save_manager.py 的 Windows 移植，功能完全一致：
   - 顶部居中「切换游戏」按钮：在 丝之歌(Silksong) 与 空洞骑士(Hollow Knight) 之间随意切换，
     每个游戏独立记忆自己的存档目录，并记住上次选择的游戏。
   - 手动存档按钮（2->3）：把 2 号档完整复制到 3 号档（3 号档作为可重复使用的检查点，保留不变）。
@@ -11,16 +11,17 @@
   - 回档按钮（4->2）：把 4 号档（每 15 分钟自动保存的检查点）完整复制到 2 号档。
   - 自动保存：每 15 分钟检测 2 号档是否有变化，有变化则复制到 4 号档。
 
-两种游戏的存档结构：
-  - 丝之歌 (unity.Team-Cherry.Silksong/<steamid>/)：Restore_PointsN/ 文件夹 + userN.dat
-  - 空洞骑士 (unity.Team Cherry.Hollow Knight/)：只有 userN.dat 平铺在根目录（无 Restore_Points）
-    空洞骑士的 userX_版本号.dat / userX.dat.bak* 等版本备份文件一律不处理，只操作 userN.dat。
+与 macOS 版的唯一差异（平台相关，逻辑不变）：
+  - 存档根目录：Windows 下位于 %USERPROFILE%\AppData\LocalLow\Team Cherry\
+        丝之歌    -> Team Cherry\Hollow Knight Silksong\<steamid>\   （Restore_PointsN + userN.dat）
+        空洞骑士  -> Team Cherry\Hollow Knight\                       （仅 userN.dat 平铺）
+  - 配置文件 / 日志：写到可写目录（exe 同目录优先，不可写则回退 %APPDATA%\HollowKnightSaveManager）。
+  - 字体：使用 Windows 上常见的 Microsoft YaHei / Consolas（缺失时由 tkinter 自动回退）。
 
 说明：
   - 后台仅一个轻量守护线程做 15 分钟轮询 + 一个 1 秒倒计时刷新，CPU/内存占用极小。
   - 复制采用“先删后拷”，确保目标档完全等同源档，不会残留旧文件。
-  - 存档根目录自动探测；找不到时弹窗让用户手动选择，并把选择写入
-    app 包内的 hollow_knight_save_manager.json（随 app 走，不放在用户目录）。
+  - 版本备份文件 userN_<版本号>.dat / userN.dat.bak* 一律不处理，只操作 userN.dat。
 """
 
 import os
@@ -31,47 +32,97 @@ import threading
 import time
 import argparse
 
-import tkinter as tk
-from tkinter import messagebox, scrolledtext, filedialog
+try:
+    import tkinter as tk
+    from tkinter import messagebox, scrolledtext, filedialog
+    _HAS_TK = True
+except Exception:  # noqa: BLE001  (无 Tcl/Tk 的环境：--selftest 仍可运行)
+    tk = messagebox = scrolledtext = filedialog = None
+    _HAS_TK = False
 
 # ---------------------------------------------------------------------------
-# 游戏定义
+# 游戏定义（Windows 平台）
 # ---------------------------------------------------------------------------
+# Windows 上 Team Cherry 的统一根目录
+TC_BASE = os.path.expanduser(os.path.join("~", "AppData", "LocalLow", "Team Cherry"))
+
+
+def _find_game_dir(base, keyword):
+    """在 base 下按精确名 / 大小写不敏感的子串匹配，找到游戏存档所在的“游戏文件夹”。
+
+    - 空洞骑士：keyword="Hollow Knight" -> Team Cherry\\Hollow Knight
+    - 丝之歌  ：keyword="Silksong"      -> Team Cherry\\Hollow Knight Silksong（本机实测名）
+    找不到返回 None（后续交给用户手动选择）。
+    """
+    exact = os.path.join(base, keyword)
+    if os.path.isdir(exact):
+        return exact
+    try:
+        for name in os.listdir(base):
+            if keyword.lower() in name.lower():
+                return os.path.join(base, name)
+    except FileNotFoundError:
+        pass
+    return None
+
+
 GAMES = {
     "silksong": {
         "name": "丝之歌",
-        "style": "silksong",  # Restore_PointsN/ + userN.dat
-        "search_root": os.path.expanduser(
-            "~/Library/Application Support/unity.Team-Cherry.Silksong"),
+        "style": "silksong",   # Restore_PointsN/ + userN.dat（位于 <steamid> 子目录内）
+        "search_root": None,   # 懒解析：Team Cherry 下的“游戏文件夹”
     },
     "hollowknight": {
         "name": "空洞骑士",
-        "style": "flat",  # 只有 userN.dat 平铺
-        "search_root": os.path.expanduser(
-            "~/Library/Application Support/unity.Team Cherry.Hollow Knight"),
+        "style": "flat",       # 只有 userN.dat 平铺在游戏文件夹根
+        "search_root": None,
     },
 }
 
 
-def _app_resources_dir():
-    """配置文件的存放目录：随 app 走，放在 app 包内的 Resources 里。
+def _resolve_search_root(game):
+    """返回 Team Cherry 下该游戏的“游戏文件夹”（含 Restore_Points2 / user2.dat 的那一层父目录）。"""
+    if game == "silksong":
+        return _find_game_dir(TC_BASE, "Silksong")
+    return _find_game_dir(TC_BASE, "Hollow Knight")
 
-    冻结后的 .app：sys.executable 位于 Contents/MacOS 下，取上一级的 Resources。
-    源码直接运行时：放在脚本同目录。
-    注意：若 app 装在只读位置（如系统级 /Applications），写入会失败，
-    此时不持久化（每次启动重新探测），属可接受的退化行为。
+
+# ---------------------------------------------------------------------------
+# 配置 / 日志目录（Windows：始终可写）
+# ---------------------------------------------------------------------------
+def _data_dir():
+    """配置文件与日志的存放目录：exe 同目录优先，不可写则回退 %APPDATA%\\HollowKnightSaveManager。
+
+    随 app 走（放在 exe 旁边）可保持“不污染用户目录”的意图；若安装到只读位置
+    （如 Program Files），自动回退到用户可写的 %APPDATA%，属可接受的退化行为。
     """
     if getattr(sys, "frozen", False):
-        return os.path.normpath(
-            os.path.join(os.path.dirname(sys.executable), "..", "Resources"))
-    return os.path.dirname(os.path.abspath(__file__))
+        cand = os.path.dirname(sys.executable)
+    else:
+        cand = os.path.dirname(os.path.abspath(__file__))
+    try:
+        test = os.path.join(cand, ".write_test")
+        with open(test, "w") as f:
+            f.write("x")
+        os.remove(test)
+        return cand
+    except Exception:
+        pass
+    fallback = os.path.join(
+        os.environ.get("APPDATA", os.path.expanduser("~")),
+        "HollowKnightSaveManager")
+    try:
+        os.makedirs(fallback, exist_ok=True)
+    except Exception:
+        pass
+    return fallback
 
 
-CONFIG_PATH = os.path.join(_app_resources_dir(), "hollow_knight_save_manager.json")
+CONFIG_PATH = os.path.join(_data_dir(), "hollow_knight_save_manager.json")
 
 AUTOSAVE_INTERVAL = 15 * 60  # 秒
 
-# 当前游戏 / 当前存档根目录（模块加载时置空，真正解析在 main()/selftest() 中按需进行）
+# 当前游戏 / 当前存档根目录
 CURRENT_GAME = None
 BASE = None
 GAME_BASES = {}  # game -> save_base
@@ -86,7 +137,6 @@ def _load_config():
             data = json.load(f)
         if "games" in data:
             return data
-        # 旧格式 {"save_base": "..."} -> 迁移为丝之歌的配置
         if data.get("save_base"):
             return {"games": {"silksong": {"save_base": data["save_base"]}},
                     "last_game": "silksong"}
@@ -104,7 +154,6 @@ def _save_config():
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
     except Exception as e:  # noqa: BLE001
-        # 常见于 app 装在只读位置（如系统级 /Applications）
         print(f"警告：无法把存档路径写入配置（{CONFIG_PATH}）：{e}")
 
 
@@ -117,17 +166,16 @@ def _validate_base(game, b):
         return False
     if game == "silksong":
         return os.path.isdir(os.path.join(b, "Restore_Points2"))
-    # hollowknight：目录存在且含 user2.dat
     return os.path.isfile(os.path.join(b, "user2.dat"))
 
 
 def _detect_candidates(game):
     """返回该游戏所有候选存档根目录（按修改时间倒序）。"""
-    root = GAMES[game]["search_root"]
+    root = _resolve_search_root(game)
+    if not root or not os.path.isdir(root):
+        return []
     if game == "silksong":
         cands = []
-        if not os.path.isdir(root):
-            return cands
         for name in os.listdir(root):
             p = os.path.join(root, name)
             if os.path.isdir(p) and os.path.isdir(os.path.join(p, "Restore_Points2")):
@@ -138,7 +186,7 @@ def _detect_candidates(game):
                 cands.append((mtime, p))
         cands.sort(reverse=True)
         return [p for _, p in cands]
-    # hollowknight：存档根目录就是 search_root 本身
+    # hollowknight：游戏文件夹根目录本身即存档根，含 user2.dat 即有效
     if os.path.isfile(os.path.join(root, "user2.dat")):
         return [root]
     return []
@@ -154,14 +202,14 @@ def _ask_user_for_base(game):
             messagebox.showinfo(
                 "选择存档目录",
                 f"未能自动找到{info['name']}存档目录。\n"
-                "请选择 unity.Team-Cherry.Silksong 下那个包含 Restore_Points2 的数字文件夹。")
+                "请选择 Team Cherry\\Hollow Knight Silksong 下那个包含 Restore_Points2 的数字文件夹。")
             path = filedialog.askdirectory(
                 title="选择 Silksong 存档目录（含 Restore_Points2 的文件夹）")
         else:
             messagebox.showinfo(
                 "选择存档目录",
                 f"未能自动找到{info['name']}存档目录。\n"
-                "请选择包含 user2.dat 的存档文件夹。")
+                "请选择包含 user2.dat 的存档文件夹（Hollow Knight）。")
             path = filedialog.askdirectory(
                 title="选择 Hollow Knight 存档目录（含 user2.dat 的文件夹）")
     finally:
@@ -189,7 +237,6 @@ def resolve_save_base(game, interactive=True):
     if cands:
         if not interactive:
             sys.exit(2)
-        # 多个候选：让用户挑（默认展示第一个）
         b = _ask_user_for_base(game) or cands[0]
     else:
         if not interactive:
@@ -324,13 +371,17 @@ class Autosaver(threading.Thread):
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
+UI_FONT = ("Microsoft YaHei", 11)
+LOG_FONT = ("Consolas", 9)
+
+
 class App:
     def __init__(self, root, game):
         global BASE, CURRENT_GAME
         CURRENT_GAME = game
         self.root = root
         self._apply_title()
-        root.geometry("430x410")
+        root.geometry("440x430")
         root.resizable(False, False)
 
         self.state = {
@@ -341,30 +392,30 @@ class App:
         }
 
         # 顶部居中：切换游戏按钮
-        self.game_btn = tk.Button(root, text=self._game_btn_text(), width=30,
-                                  command=self.switch_game)
+        self.game_btn = tk.Button(root, text=self._game_btn_text(), width=34,
+                                  font=UI_FONT, command=self.switch_game)
         self.game_btn.pack(pady=(12, 2))
 
         self.status_var = tk.StringVar(value="准备就绪")
         tk.Label(root, textvariable=self.status_var, fg="#1a59d6",
-                 wraplength=400, font=("Helvetica", 11, "bold")).pack(pady=(6, 2))
+                 wraplength=410, font=("Microsoft YaHei", 11, "bold")).pack(pady=(6, 2))
         self.count_var = tk.StringVar(value="下次自动保存检查：--:--")
         tk.Label(root, textvariable=self.count_var, fg="#555555").pack()
 
         frm = tk.Frame(root)
         frm.pack(pady=10)
-        tk.Button(frm, text="手动存档 (2→3)", width=15,
+        tk.Button(frm, text="手动存档 (2→3)", width=16, font=UI_FONT,
                   command=self.manual_save).grid(row=0, column=0, padx=5, pady=5)
-        tk.Button(frm, text="回档 (3→2)", width=15,
+        tk.Button(frm, text="回档 (3→2)", width=16, font=UI_FONT,
                   command=self.rollback).grid(row=0, column=1, padx=5, pady=5)
-        tk.Button(frm, text="回档 (4→2)", width=15,
+        tk.Button(frm, text="回档 (4→2)", width=16, font=UI_FONT,
                   command=self.rollback4).grid(row=1, column=0, padx=5, pady=5)
-        tk.Button(frm, text="退出", width=15,
+        tk.Button(frm, text="退出", width=16, font=UI_FONT,
                   command=self.quit_app).grid(row=1, column=1, padx=5, pady=5)
 
-        tk.Label(root, text="操作日志", fg="#333333").pack(anchor="w", padx=10)
+        tk.Label(root, text="操作日志", fg="#333333", font=UI_FONT).pack(anchor="w", padx=10)
         self.log = scrolledtext.ScrolledText(
-            root, height=9, wrap=tk.WORD, font=("Menlo", 9))
+            root, height=9, wrap=tk.WORD, font=LOG_FONT)
         self.log.pack(fill=tk.BOTH, expand=True, padx=10, pady=(2, 10))
 
         self.log_msg(f"存档目录：{BASE}")
@@ -421,7 +472,6 @@ class App:
             return
         GAME_BASES[new] = BASE
         _save_config()
-        # 刷新自动保存基准（换游戏后指纹立即对准新游戏的 2 号档）
         with self.state["lock"]:
             self.state["last_sig"] = slot_signature(2)
             self.state["next_check"] = time.time() + AUTOSAVE_INTERVAL
@@ -545,7 +595,7 @@ def selftest():
     global BASE, CURRENT_GAME
     import tempfile
 
-    tmp = tempfile.mkdtemp(prefix="ssl_test_")
+    tmp = tempfile.mkdtemp(prefix="hk_sm_test_")
     print("selftest base:", tmp)
     try:
         # ---- 丝之歌结构（Restore_PointsN + userN.dat）----
@@ -584,7 +634,7 @@ def selftest():
 # ---------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="空洞骑士存档管理器（Hollow Knight / Silksong 双游戏）")
+        description="空洞骑士存档管理器（Windows 版，Hollow Knight / Silksong 双游戏）")
     parser.add_argument("--selftest", action="store_true",
                         help="运行逻辑自检（不修改真实存档）")
     args = parser.parse_args()
@@ -607,8 +657,8 @@ def main():
     GAME_BASES[CURRENT_GAME] = BASE
     _save_config()
 
-    # 运行日志写到用户可写位置（安装到 /Applications 后 Resources 不可写）
-    log_dir = os.path.expanduser("~/Library/Logs/HollowKnightSaveManager")
+    # 运行日志写到可写位置（exe 旁或 %APPDATA%）
+    log_dir = _data_dir()
     try:
         os.makedirs(log_dir, exist_ok=True)
         log_path = os.path.join(log_dir, "app.log")
