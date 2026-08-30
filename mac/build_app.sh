@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 把 save_manager.py 冻结为自包含的 macOS .app（不依赖系统 Python）。
 # 产物：dist/HollowKnightSaveManager.app（显示名：空洞骑士存档管理器）
-set -euo pipefail
+set -eu
+set -o pipefail 2>/dev/null || true
 
 # 仓库根目录（脚本所在目录）
 REPO="$(cd "$(dirname "$0")" && pwd)"
@@ -40,6 +41,10 @@ INFO="$REPO/dist/HollowKnightSaveManager.app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName 空洞骑士存档管理器" "$INFO"
 /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 空洞骑士存档管理器" "$INFO" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 空洞骑士存档管理器" "$INFO"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 3.0.0" "$INFO" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 3.0.0" "$INFO"
+/usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 3.0.0" "$INFO" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 3.0.0" "$INFO"
 
 echo "==> 完成：dist/HollowKnightSaveManager.app"
 ls -lh "$REPO/dist/HollowKnightSaveManager.app"

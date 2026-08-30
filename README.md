@@ -10,12 +10,12 @@
 
 ## 下载
 
-- **Windows**：[HollowKnightSaveManager.exe](https://github.com/Shuaichen-He/hollow-knight-save-manager/releases/download/v2.0/HollowKnightSaveManager.exe)
+- **Windows**：[HollowKnightSaveManager.exe](https://github.com/Shuaichen-He/hollow-knight-save-manager/releases/download/v3.0/HollowKnightSaveManager.exe)
   —— 单文件，双击即运行，**无需安装、无需本机有 Python**。
-- **macOS**：[hollow-knight-save-manager.pkg](https://github.com/Shuaichen-He/hollow-knight-save-manager/releases/download/v2.0/hollow-knight-save-manager.pkg)
+- **macOS**：[hollow-knight-save-manager.pkg](https://github.com/Shuaichen-He/hollow-knight-save-manager/releases/download/v3.0/hollow-knight-save-manager.pkg)
   —— 双击安装到用户级 `~/Applications`（也可直接把 `.app` 拖进去，免安装器）。
 
-> 两个二进制都放在仓库的 **GitHub Release（v2.0）** 中；私有仓库需先登录 GitHub 再下载。
+> 两个二进制都放在仓库的 **GitHub Release（v3.0）** 中；私有仓库需先登录 GitHub 再下载。
 > 仓库于 2026-08 由 `silksong-save-manager` 更名而来，旧链接会自动跳转到新地址。
 
 ## 不同电脑的存档路径会自动适配（下载后无需改配置）
